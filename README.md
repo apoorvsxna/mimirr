@@ -1,3 +1,5 @@
+This has been abandoned as the latency involved here is not acceptable for using phone as gamepad (even if [socket.io](https://socket.io/) is used). Although there are plans to build this from scratch, using native Java for Android, sometime in the future.
+
 # Mimir
 A multi-purpose remote control utility to control your PC using another device such as a phone, or even another PC.
 
