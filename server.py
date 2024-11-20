@@ -1,190 +1,210 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
-from pynput.keyboard import Key, KeyCode, Controller
-from time import sleep
 import os
 import threading
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from time import sleep
+from typing import List, Optional
+from dataclasses import dataclass
+from pynput.keyboard import Key, KeyCode, Controller
+from SimpleWebSocketServer import SimpleWebSocketServer, WebSocket
 
-# Constants for server ports
-HTTP_PORT = 8080  # Change as needed
-WS_PORT = 8000    # Change as needed
-DEBUG = True      # Set to True for debug messages
+@dataclass
+class ServerConfig:
+    http_port: int = 8080
+    ws_port: int = 8000
+    debug: bool = True
+    max_gamepads: int = 4
 
-# Import vgamepad if installed
-vgamepadInstalled = True
-vgamepadError = False
-class VgamepadDisabled(Exception): pass
+class GamepadManager:
+    def __init__(self, config: ServerConfig):
+        self.config = config
+        self.keyboard = Controller()
+        self.gamepads = []
+        self._initialize_gamepads()
 
-# Removed options management
-# No longer checking for 'disableVgamepad'
-try:
-    from vgamepad import VX360Gamepad, XUSB_BUTTON
-    gamepads = [VX360Gamepad() for _ in range(4)]
-except ModuleNotFoundError:
-    gamepads = None
-    vgamepadInstalled = False
-except VgamepadDisabled:
-    gamepads = None
-except Exception as err:
-    gamepads = None
-    vgamepadError = True
-    if DEBUG: print(f"Error: {err}")
+    def _initialize_gamepads(self) -> None:
+        try:
+            from vgamepad import VX360Gamepad
+            self.gamepads = [VX360Gamepad() for _ in range(self.config.max_gamepads)]
+            if self.config.debug:
+                print(f"Successfully initialized {len(self.gamepads)} virtual gamepads")
+        except ModuleNotFoundError:
+            print("vgamepad module not found. Virtual gamepad support disabled.")
+        except Exception as e:
+            print(f"Failed to initialize gamepads: {e}")
 
-keyboard = Controller()
+    def get_key(self, key_name: str) -> Key | KeyCode | str:
+        """Convert string key name to pynput key object."""
+        if len(key_name) > 1:
+            return KeyCode(int(key_name)) if key_name.isdigit() else Key[key_name]
+        return key_name
 
-# Set the current directory
-os.chdir(os.path.join(os.path.dirname(__file__), ''))
+    def execute_command(self, client: WebSocket, command: str, key: str, player: int, use_gamepad: bool = False) -> None:
+        """Execute keyboard or gamepad command."""
+        if self.config.debug:
+            print(f'[PLAYER {player + 1} COMMAND] {key}')
 
-# Get keyboard key by name
-def getKey(keyName):
-    if len(keyName) > 1:
-        if keyName.isdigit(): return KeyCode(int(keyName))
-        else: return Key[keyName]
-    return keyName
+        try:
+            if use_gamepad:
+                self._handle_gamepad_command(client, command, key, player)
+            else:
+                self._handle_keyboard_command(command, key)
+        except Exception as e:
+            if self.config.debug:
+                print(f"Error executing command: {e}")
+            client.sendMessage(f"ERROR: {str(e)}")
 
-# Press or release keyboard keys or gamepad buttons
-def keyCommand(wsClient, cmd, key, player, vpad=False):
-    if DEBUG: print(f'[PLAYER {player + 1} COMMAND] {key}')
-    try:
-        # Gamepad commands
-        if vpad:
-            if not gamepads:
-                wsClient.sendMessage('INFO Virtual control is not installed')
+    def _handle_gamepad_command(self, client: WebSocket, command: str, key: str, player: int) -> None:
+        """Handle gamepad-specific commands."""
+        if not self.gamepads:
+            client.sendMessage('INFO: Virtual gamepad control is not available')
+            return
+
+        if command in ('vjl', 'vjr'):
+            self._handle_joystick(command, key, player)
+        else:
+            self._handle_button(command, key, player)
+
+    def _handle_joystick(self, command: str, key: str, player: int) -> None:
+        """Handle joystick movement commands."""
+        x, y = map(int, key.split('|'))
+        # Map the input values (0-65535) to the correct range (-32768 to 32767)
+        x = max(-32768, min(32767, x - 32768))
+        y = max(-32768, min(32767, y - 32768))
+        
+        stick = 'left' if command == 'vjl' else 'right'
+        getattr(self.gamepads[player], f'{stick}_joystick')(x_value=x, y_value=y)
+        self.gamepads[player].update()
+
+    def _handle_button(self, command: str, key: str, player: int) -> None:
+        """Handle gamepad button commands."""
+        from vgamepad import XUSB_BUTTON
+        
+        def press_button(pressed: bool) -> None:
+            value = 255 if pressed else 0
+            if key == 'xusb_gamepad_left_trigger':
+                self.gamepads[player].left_trigger(value=value)
+            elif key == 'xusb_gamepad_right_trigger':
+                self.gamepads[player].right_trigger(value=value)
+            else:
+                method = 'press_button' if pressed else 'release_button'
+                getattr(self.gamepads[player], method)(button=XUSB_BUTTON[key.upper()])
+
+        if command == 'p':
+            press_button(True)
+        elif command == 'r':
+            press_button(False)
+        elif command == 't':
+            press_button(True)
+            self.gamepads[player].update()
+            sleep(0.05)
+            press_button(False)
+
+        self.gamepads[player].update()
+
+    def _handle_keyboard_command(self, command: str, key: Key | KeyCode | str) -> None:
+        """Handle keyboard-specific commands."""
+        if command == 'p':
+            self.keyboard.press(key)
+        elif command == 'r':
+            self.keyboard.release(key)
+        elif command == 't':
+            self.keyboard.press(key)
+            sleep(0.05)
+            self.keyboard.release(key)
+
+class GamepadWebSocketHandler(WebSocket):
+    clients: List[WebSocket] = []
+    gamepad_manager: Optional[GamepadManager] = None
+
+    def handleMessage(self) -> None:
+        try:
+            msg_parts = self.data.lower().split(' ')
+            command = msg_parts[0]
+
+            if command == 'ping':
+                self.sendMessage(f'pong {msg_parts[1]}')
                 return
 
-            # Press a button on the gamepad
-            def button(action, key):
-                t = 255 if action == 'press' else 0
-                if key == 'xusb_gamepad_left_trigger': 
-                    gamepads[player].left_trigger(value=t)
-                elif key == 'xusb_gamepad_right_trigger': 
-                    gamepads[player].right_trigger(value=t)
-                else: 
-                    getattr(gamepads[player], f'{action}_button')(button=XUSB_BUTTON[key.upper()])
-                if DEBUG: print(f'Gamepad {action} on {key}')
+            keys = msg_parts[1].split(',')
+            player = int(msg_parts[2]) if len(msg_parts) >= 3 else 0
 
-            # Control a gamepad joystick
-            def joystick(side, key):
-                x, y = list(map(int, key.split('|')))
-                getattr(gamepads[player], f'{side}_joystick')(x_value=x, y_value=y)
-                if DEBUG: print(f'Moved {side} joystick to x:{x}, y:{y}')
+            for key in keys:
+                use_gamepad = command.startswith('v') or key.startswith('xusb_gamepad')
+                key_obj = key if use_gamepad else self.gamepad_manager.get_key(key)
+                self.gamepad_manager.execute_command(self, command, key_obj, player, use_gamepad)
 
-            if cmd == 'vjl': joystick('left', key)
-            elif cmd == 'vjr': joystick('right', key)
-            elif cmd == 'r': button('release', key)
-            elif cmd == 'p': button('press', key)
-            elif cmd == 't':
-                button('press', key)
-                gamepads[player].update()
-                sleep(0.05)
-                button('release', key)
-            gamepads[player].update()
+        except Exception as e:
+            if self.gamepad_manager.config.debug:
+                print(f'WebSocket message error: {e}')
+            self.sendMessage(f'ERROR: {str(e)}')
 
-        # Keyboard commands
-        elif cmd == 'r': 
-            keyboard.release(key)
-            if DEBUG: print(f'Released keyboard key: {key}')
-        elif cmd == 'p': 
-            keyboard.press(key)
-            if DEBUG: print(f'Pressed keyboard key: {key}')
-        elif cmd == 't':
-            keyboard.press(key)
-            sleep(0.05)
-            keyboard.release(key)
-            if DEBUG: print(f'Tapped keyboard key: {key}')
+    def handleConnected(self) -> None:
+        GamepadWebSocketHandler.clients.append(self)
+        if self.gamepad_manager.config.debug:
+            print(f'Client connected: {self.address}')
 
-    except Exception as err:
-        if DEBUG: print(f'Error: {err}')
+    def handleClose(self) -> None:
+        GamepadWebSocketHandler.clients.remove(self)
+        if self.gamepad_manager.config.debug:
+            print(f'Client disconnected: {self.address}')
 
-
-# Handle WebSocket messages
-def message(msg, client):
-    msg = msg.lower().split(' ')
-    cmd = msg[0]
-    
-    if DEBUG: print(f'[MESSAGE RECEIVED] Command: {cmd}, Message: {msg}')
-
-    if cmd == 'ping':
-        pingID = msg[1]
-        client.sendMessage(f'pong {pingID}')
-        return
-
-    keys = msg[1].split(',')
-    player = int(msg[2]) if len(msg) >= 3 else 0
-    for key in keys:
-        if cmd.startswith('v') or key.startswith('xusb_gamepad'):
-            keyCommand(client, cmd, key, player, True)
-        else:
-            keyCommand(client, cmd, getKey(key), player)
-
-
-# HTTP Server
-class NoCacheRequestHandler(SimpleHTTPRequestHandler):
-    def end_headers(self):
-        self.myHeaders()
-        SimpleHTTPRequestHandler.end_headers(self)
-
-    def myHeaders(self):
+class NoCacheHTTPHandler(SimpleHTTPRequestHandler):
+    def end_headers(self) -> None:
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
+        super().end_headers()
 
-    def log_message(self, format, *args):
-        return
+    def log_message(self, format: str, *args) -> None:
+        pass
 
-class CustomThreadingHTTPServer(ThreadingHTTPServer):
-    def handle_error(self, request, client_address):
-        return
+class GamepadServer:
+    def __init__(self, config: ServerConfig):
+        self.config = config
+        self.gamepad_manager = GamepadManager(config)
+        GamepadWebSocketHandler.gamepad_manager = self.gamepad_manager
+        
+        # Set working directory
+        os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-# Start HTTP server
-def httpServer():
-    httpd = CustomThreadingHTTPServer(('', HTTP_PORT), NoCacheRequestHandler)
-    if DEBUG: print(f'HTTP server starting on port {HTTP_PORT}')
-    httpd.serve_forever()
+    def start(self) -> None:
+        """Start both HTTP and WebSocket servers in separate threads."""
+        http_thread = threading.Thread(target=self._run_http_server)
+        ws_thread = threading.Thread(target=self._run_websocket_server)
 
-# WebSocket Server
-wsClients = []
-class WebSocketServer(WebSocket):
-    def handleMessage(self):
-        try: 
-            message(self.data, self)
-        except Exception as err:
-            if DEBUG: print(f'WebSocket error: {err}')
+        http_thread.daemon = True
+        ws_thread.daemon = True
 
-    def handleConnected(self):
-        wsClients.append(self)
-        if DEBUG: print(f'User connected ({self.address})')
+        http_thread.start()
+        ws_thread.start()
 
-    def handleClose(self):
-        wsClients.remove(self)
-        if DEBUG: print(f'User disconnected ({self.address})')
+        if self.config.debug:
+            print(f'Server started - HTTP: {self.config.http_port}, WebSocket: {self.config.ws_port}')
 
-# Send a message to all WebSocket clients
-def sendWebSocketMsg(msg):
-    for client in wsClients:
-        client.sendMessage(msg)
+        try:
+            while True:
+                sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down servers...")
 
-# Start WebSocket server
-def wsServer():
-    wss = SimpleWebSocketServer('0.0.0.0', WS_PORT, WebSocketServer)
-    if DEBUG: print(f'WebSocket server starting on port {WS_PORT}')
-    wss.serveforever()
+    def _run_http_server(self) -> None:
+        """Run the HTTP server."""
+        server = ThreadingHTTPServer(('', self.config.http_port), NoCacheHTTPHandler)
+        if self.config.debug:
+            print(f'HTTP server starting on port {self.config.http_port}')
+        server.serve_forever()
 
-# Entry point for the script
+    def _run_websocket_server(self) -> None:
+        """Run the WebSocket server."""
+        server = SimpleWebSocketServer('0.0.0.0', self.config.ws_port, GamepadWebSocketHandler)
+        if self.config.debug:
+            print(f'WebSocket server starting on port {self.config.ws_port}')
+        server.serveforever()
+
 if __name__ == "__main__":
-    # Start threads for HTTP and WebSocket servers
-    httpThread = threading.Thread(target=httpServer)
-    httpThread.daemon = True
-    httpThread.start()
-    wsThread = threading.Thread(target=wsServer)
-    wsThread.daemon = True
-    wsThread.start()
-
-    if DEBUG: print(f'Server started on ports HTTP: {HTTP_PORT}, WebSocket: {WS_PORT}')
-
-    # Keep the main thread alive
-    while True:
-        sleep(1)
+    config = ServerConfig()
+    server = GamepadServer(config)
+    server.start()
