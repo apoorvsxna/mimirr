@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1c1c1e" />
+  <title>Mimirr: Remote Control</title>
+  <link rel="stylesheet" href="css/launch.css" />
+</head>
+<body>
+  <div class="launch-container">
+    <h1>Mimirr</h1>
+    <div class="subtitle">Remote Control</div>
+    <div class="player-select">
+      <h2>Select Player Number</h2>
+      <div class="player-buttons">
+        <button class="player-btn" data-player="0">Player 1</button>
+        <button class="player-btn" data-player="1">Player 2</button>
+        <button class="player-btn" data-player="2">Player 3</button>
+        <button class="player-btn" data-player="3">Player 4</button>
+      </div>
+    </div>
+    <button id="start-btn" disabled>Start Controller</button>
+  </div>
+
+  <script>
+    let selectedPlayer = null;
+    
+    document.querySelectorAll('.player-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.player-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedPlayer = btn.dataset.player;
+        document.getElementById('start-btn').disabled = false;
+      });
+    });
+    
+    document.getElementById('start-btn').addEventListener('click', () => {
+      if (selectedPlayer !== null) {
+        if (document.documentElement.requestFullscreen || 
+            document.documentElement.webkitRequestFullscreen) {
+          window.location.href = `gamepad.html?player=${selectedPlayer}`;
+        } else {
+          alert('Fullscreen mode is not supported on your device. The gamepad may not work as expected.');
+          window.location.href = `gamepad.html?player=${selectedPlayer}`;
+        }
+      }
+    });
+  </script>
+</body>
+</html>
