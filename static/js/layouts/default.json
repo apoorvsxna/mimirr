@@ -1,0 +1,73 @@
+{
+  "dpad": {
+    "position": { "x": "25%", "y": "60%" }
+  },
+  "buttons": [
+    {
+      "type": "XUSB_GAMEPAD_A",
+      "position": { "x": "82%", "y": "65%" },
+      "label": "A",
+      "color": "#34c759"
+    },
+    {
+      "type": "XUSB_GAMEPAD_B",
+      "position": { "x": "88%", "y": "58%" },
+      "label": "B",
+      "color": "#ff453a"
+    },
+    {
+      "type": "XUSB_GAMEPAD_X",
+      "position": { "x": "76%", "y": "58%" },
+      "label": "X",
+      "color": "#0a84ff"
+    },
+    {
+      "type": "XUSB_GAMEPAD_Y",
+      "position": { "x": "82%", "y": "51%" },
+      "label": "Y",
+      "color": "#ff9f0a"
+    },
+    {
+      "type": "XUSB_GAMEPAD_START",
+      "position": { "x": "58%", "y": "40%" },
+      "label": "Start"
+    },
+    {
+      "type": "XUSB_GAMEPAD_BACK",
+      "position": { "x": "42%", "y": "40%" },
+      "label": "Back"
+    },
+    {
+      "type": "XUSB_GAMEPAD_LEFT_SHOULDER",
+      "position": { "x": "25%", "y": "20%" },
+      "label": "LB"
+    },
+    {
+      "type": "XUSB_GAMEPAD_RIGHT_SHOULDER",
+      "position": { "x": "75%", "y": "20%" },
+      "label": "RB"
+    }
+  ],
+  "joysticks": [
+    {
+      "type": "LEFT_THUMB",
+      "position": { "x": "25%", "y": "35%" }
+    },
+    {
+      "type": "RIGHT_THUMB",
+      "position": { "x": "75%", "y": "35%" }
+    }
+  ],
+  "triggers": [
+    {
+      "type": "XUSB_GAMEPAD_LEFT_TRIGGER",
+      "position": { "x": "25%", "y": "10%" },
+      "label": "LT"
+    },
+    {
+      "type": "XUSB_GAMEPAD_RIGHT_TRIGGER",
+      "position": { "x": "75%", "y": "10%" },
+      "label": "RT"
+    }
+  ]
+}
